@@ -1,4 +1,5 @@
-import { Loader2, RotateCcw, Sparkles } from 'lucide-react'
+import { BookmarkPlus, Loader2, RotateCcw, Sparkles, Star } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { cn } from '@/lib/cn'
 import {
@@ -6,6 +7,30 @@ import {
   LINE_PRESETS,
   type LineParameters,
 } from '@/lib/lineProcessor'
+
+/** 自定义预设 1：用 localStorage 存一组用户调好的参数，避免写死。 */
+const CUSTOM_PRESET_KEY = 'glyphlens.linePreset.custom1'
+
+function readCustomPreset(): LineParameters | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_PRESET_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<LineParameters>
+    // 与默认值合并，兼容字段新增
+    return { ...DEFAULT_LINE_PARAMETERS, ...parsed }
+  } catch {
+    return null
+  }
+}
+
+function writeCustomPreset(params: LineParameters): void {
+  try {
+    window.localStorage.setItem(CUSTOM_PRESET_KEY, JSON.stringify(params))
+  } catch {
+    // 静默失败：私密模式 / 配额满；不影响主流程
+  }
+}
 
 interface LineParameterPanelProps {
   params: LineParameters
@@ -46,10 +71,15 @@ function SliderRow({
 }) {
   const percentage = ((value - min) / Math.max(0.0001, max - min)) * 100
   return (
-    <label className={cn('flex items-center gap-3', disabled && 'opacity-50')}>
-      <span className="flex w-24 shrink-0 flex-col text-[11px] leading-tight text-ink-500">
-        <span className="font-medium text-ink-600">{label}</span>
-        {hint ? <span className="text-[10px] text-ink-400">{hint}</span> : null}
+    <label className={cn('flex flex-col gap-0.5', disabled && 'opacity-50')}>
+      <span className="flex items-center justify-between text-[10px] leading-tight text-ink-500">
+        <span>
+          <span className="font-medium text-ink-600">{label}</span>
+          {hint ? <span className="ml-1 text-ink-400">{hint}</span> : null}
+        </span>
+        <span className="font-mono text-ochre-700">
+          {format ? format(value) : value.toFixed(0)}
+        </span>
       </span>
       <input
         type="range"
@@ -59,14 +89,11 @@ function SliderRow({
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
         disabled={disabled}
-        className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-paper-300/70 accent-ochre-500"
+        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-paper-300/70 accent-ochre-500"
         style={{
           background: `linear-gradient(to right, var(--color-ochre-500) 0%, var(--color-ochre-500) ${percentage}%, var(--color-paper-300) ${percentage}%, var(--color-paper-300) 100%)`,
         }}
       />
-      <span className="w-14 shrink-0 text-right font-mono text-[11px] text-ochre-700">
-        {format ? format(value) : value.toFixed(0)}
-      </span>
     </label>
   )
 }
@@ -83,16 +110,12 @@ function ToggleRow({
   onChange: (value: boolean) => void
 }) {
   return (
-    <label className="flex items-center gap-3">
-      <span className="flex w-24 shrink-0 flex-col text-[11px] leading-tight text-ink-500">
-        <span className="font-medium text-ink-600">{label}</span>
-        {hint ? <span className="text-[10px] text-ink-400">{hint}</span> : null}
-      </span>
+    <label className="flex items-center gap-2">
       <button
         type="button"
         onClick={() => onChange(!checked)}
         className={cn(
-          'relative h-5 w-9 shrink-0 rounded-full border transition',
+          'relative h-4 w-7 shrink-0 rounded-full border transition',
           checked
             ? 'border-ochre-500/80 bg-ochre-400/60'
             : 'border-paper-400/70 bg-paper-200',
@@ -100,12 +123,15 @@ function ToggleRow({
       >
         <span
           className={cn(
-            'absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-paper-50 shadow transition-all',
-            checked ? 'left-[calc(100%-1.125rem)]' : 'left-0.5',
+            'absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-paper-50 shadow transition-all',
+            checked ? 'left-[calc(100%-0.875rem)]' : 'left-0.5',
           )}
         />
       </button>
-      <span className="ml-auto text-[10px] text-ink-400">{checked ? '开' : '关'}</span>
+      <span className="flex flex-col text-[10px] leading-tight text-ink-500">
+        <span className="font-medium text-ink-600">{label}</span>
+        {hint ? <span className="text-ink-400">{hint}</span> : null}
+      </span>
     </label>
   )
 }
@@ -119,6 +145,32 @@ export default function LineParameterPanel({
   const setParam = <K extends keyof LineParameters>(key: K, value: LineParameters[K]) => {
     onChange({ ...params, [key]: value })
   }
+
+  const [customPreset, setCustomPreset] = useState<LineParameters | null>(() =>
+    readCustomPreset(),
+  )
+
+  useEffect(() => {
+    // 同一浏览器多个 tab 间同步
+    const handler = (event: StorageEvent) => {
+      if (event.key === CUSTOM_PRESET_KEY) {
+        setCustomPreset(readCustomPreset())
+      }
+    }
+    window.addEventListener('storage', handler)
+    return () => window.removeEventListener('storage', handler)
+  }, [])
+
+  const saveCustomPreset = useCallback(() => {
+    writeCustomPreset(params)
+    setCustomPreset(params)
+  }, [params])
+
+  const applyCustomPreset = useCallback(() => {
+    if (customPreset) {
+      onChange({ ...customPreset })
+    }
+  }, [customPreset, onChange])
 
   const renderStatus = () => {
     switch (status.kind) {
@@ -182,15 +234,15 @@ export default function LineParameterPanel({
   }
 
   return (
-    <div className="flex shrink-0 flex-col gap-3 border-b border-paper-300/70 bg-paper-50/40 px-6 py-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 text-[12px] text-ink-600">
-          <Sparkles className="h-3.5 w-3.5 text-ochre-500" />
-          <span className="font-medium">数字线图实时参数</span>
-        </div>
+    <div className="flex shrink-0 flex-col gap-2 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[11px] text-ink-600">
+        <Sparkles className="h-3 w-3 text-ochre-500" />
+        <span className="font-medium">线图参数</span>
+        <div className="ml-auto">{renderStatus()}</div>
+      </div>
 
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="text-[11px] text-ink-400">预设</span>
+      <div className="flex flex-wrap gap-1">
+        <span className="text-[10px] text-ink-400">预设</span>
           {Object.entries(LINE_PRESETS).map(([key, preset]) => (
             <button
               key={key}
@@ -201,6 +253,36 @@ export default function LineParameterPanel({
               {preset.label}
             </button>
           ))}
+
+          <button
+            type="button"
+            onClick={applyCustomPreset}
+            disabled={!customPreset}
+            title={
+              customPreset
+                ? '应用已保存的「自定义 1」参数'
+                : '尚未保存，先点右侧 “保存 自定义 1”'
+            }
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] transition',
+              customPreset
+                ? 'border-ochre-500/60 bg-ochre-400/10 text-ochre-700 hover:border-ochre-500 hover:bg-ochre-400/20'
+                : 'cursor-not-allowed border-paper-400/50 bg-paper-50 text-ink-300',
+            )}
+          >
+            <Star className="h-3 w-3" />
+            自定义 1
+          </button>
+          <button
+            type="button"
+            onClick={saveCustomPreset}
+            title="把当前滑块参数保存为「自定义 1」（存在浏览器本地，可随时覆盖）"
+            className="inline-flex items-center gap-1 rounded-full border border-paper-400/60 bg-paper-50 px-2.5 py-1 text-[11px] text-ink-500 transition hover:border-ochre-400/70 hover:text-ochre-600"
+          >
+            <BookmarkPlus className="h-3 w-3" />
+            {customPreset ? '覆盖 自定义 1' : '保存 自定义 1'}
+          </button>
+
           <button
             type="button"
             onClick={() => onChange({ ...DEFAULT_LINE_PARAMETERS })}
@@ -211,10 +293,7 @@ export default function LineParameterPanel({
           </button>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">{renderStatus()}</div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-x-6 gap-y-2 md:grid-cols-2 xl:grid-cols-3">
+      <div className="flex flex-col gap-2">
         <SliderRow
           label="高斯 σ"
           hint="平滑强度，越大越粗"
@@ -322,6 +401,7 @@ export default function LineParameterPanel({
           checked={params.invert}
           onChange={(v) => setParam('invert', v)}
         />
+
       </div>
     </div>
   )

@@ -1,11 +1,10 @@
-import { BookMarked, Database, Layers, Sparkles } from 'lucide-react'
+import { BookMarked, Database, Sparkles } from 'lucide-react'
 
 import { cn } from '@/lib/cn'
 import { MODULES, useAppStore, type ModuleId } from '@/stores/appStore'
 
 const ICONS: Record<ModuleId, typeof Sparkles> = {
   imageProcessing: Sparkles,
-  multiLayer: Layers,
   annotation: BookMarked,
   dataset: Database,
 }
@@ -16,12 +15,12 @@ export default function ModuleSidebar() {
 
   return (
     <aside className="flex min-h-screen w-20 shrink-0 flex-col items-center border-r border-paper-300/70 bg-paper-50/70 backdrop-blur">
-      <div
-        className="mt-4 flex h-11 w-11 items-center justify-center rounded-xl border border-seal-500/60 bg-seal-500/10 text-seal-500"
+      <img
+        src="/logo.png"
+        alt="中国遗产保护"
         title="GlyphLens · 碑刻与画像石微痕工作台"
-      >
-        <span className="font-display text-lg leading-none">碑</span>
-      </div>
+        className="mt-4 h-11 w-11 rounded-xl object-contain"
+      />
 
       <nav className="mt-6 flex w-full flex-1 flex-col items-center gap-2 px-2">
         {MODULES.map((module) => {

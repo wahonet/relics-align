@@ -86,8 +86,13 @@ export const LINE_PRESETS: Record<string, { label: string; params: LineParameter
   },
 }
 
-/** 源图处理时的最大长边。3072 与用户选择一致：清晰度/速度折衷。 */
-const MAX_LONG_EDGE = 3072
+/**
+ * 源图处理时的最大长边。
+ * 与后端 previewLongEdge 对齐在 2048：
+ *   - 原先取 3072，连通域扫描 + adaptiveThreshold 容易让主线程长时间阻塞；
+ *   - 2048 下单次线图稳定在 1~2 秒，视觉差异对比微弱。
+ */
+const MAX_LONG_EDGE = 2048
 
 /** 由 scripts/copy-opencv.mjs 在 predev/prebuild 时写入 public/vendor。 */
 const OPENCV_URL = '/vendor/opencv.js'
@@ -534,6 +539,14 @@ export interface LineRenderResult {
   elapsedMs: number
 }
 
+/**
+ * 把事件循环让一次，给浏览器重绘 + 响应用户操作（比如切换到别的面板）。
+ * 浏览器端 opencv.js 的每个算子都同步跑在主线程，必须在算子之间主动让帧，
+ * 否则整段管线会形成一个几百毫秒的 Long Task，表现为"页面卡死"。
+ */
+const yieldFrame = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0))
+
 /** 运行一遍线图处理；调用方负责在新结果到来时 revoke 上一次的 URL。 */
 export async function renderLine(
   source: LineSource,
@@ -548,6 +561,7 @@ export async function renderLine(
 
   const cv = await getCv()
   mark('cv-ready')
+  await yieldFrame()
 
   // 载入 + 灰度
   const src = cv.matFromImageData(source.imageData)
@@ -562,12 +576,14 @@ export async function renderLine(
   const sigma = Math.max(0.1, params.gaussianSigma)
   cv.GaussianBlur(gray, blurred, new cv.Size(0, 0), sigma, sigma, cv.BORDER_DEFAULT)
   mark('GaussianBlur', `sigma=${sigma}`)
+  await yieldFrame()
 
   // Canny
   let combined = new cv.Mat()
   cv.Canny(blurred, combined, params.cannyLow, params.cannyHigh)
   blurred.delete()
   mark('Canny', `low=${params.cannyLow} high=${params.cannyHigh}`)
+  await yieldFrame()
 
   // 自适应阈值（可选）
   if (params.useAdaptive) {
@@ -594,6 +610,7 @@ export async function renderLine(
     combined.delete()
     combined = merged
     mark('bitwise_or(canny, adaptive)')
+    await yieldFrame()
   }
 
   gray.delete()
@@ -608,6 +625,7 @@ export async function renderLine(
     combined.delete()
     combined = closed
     mark('morph-close', `size=${size}`)
+    await yieldFrame()
   }
 
   // 连通域过滤
@@ -650,12 +668,21 @@ export async function renderLine(
     const labelsData = labels.data32S as Int32Array
     const filtered = cv.Mat.zeros(combined.rows, combined.cols, cv.CV_8UC1)
     const filteredData = filtered.data as Uint8Array
-    for (let i = 0; i < labelsData.length; i += 1) {
-      if (keepIds.has(labelsData[i])) {
-        filteredData[i] = 255
+    // 分批扫描像素；每 1M 像素让一次帧，避免单个 Long Task 卡住主线程。
+    const CHUNK = 1 << 20
+    for (let base = 0; base < labelsData.length; base += CHUNK) {
+      const end = Math.min(base + CHUNK, labelsData.length)
+      for (let i = base; i < end; i += 1) {
+        if (keepIds.has(labelsData[i])) {
+          filteredData[i] = 255
+        }
+      }
+      if (end < labelsData.length) {
+        await yieldFrame()
       }
     }
     mark('components-filter-applied', `pixels=${labelsData.length}`)
+    await yieldFrame()
 
     labels.delete()
     stats.delete()
@@ -673,6 +700,7 @@ export async function renderLine(
     combined.delete()
     combined = dilated
     mark('dilate', `iters=${params.dilateIters}`)
+    await yieldFrame()
   }
 
   // 反色
@@ -716,6 +744,64 @@ export async function renderLine(
     height,
     sourceWidth: source.sourceWidth,
     sourceHeight: source.sourceHeight,
+    byteLength: blob.size,
+    elapsedMs: Math.round(performance.now() - started),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 细线描边：完全独立的后处理（走后端，不用浏览器端 opencv.js）
+// ---------------------------------------------------------------------------
+
+export interface ThinLineResult {
+  url: string
+  blob: Blob
+  width: number
+  height: number
+  byteLength: number
+  elapsedMs: number
+}
+
+/**
+ * 把已渲染好的线图 POST 到后端 /api/thin-line，
+ * 后端 findContours + drawContours(LINE_AA) 后返回新 PNG。
+ * 不加载浏览器端 opencv.js，不卡主线程。
+ */
+export async function applyThinLine(
+  sourceUrl: string,
+  lineWidth: number,
+  apiBase: string,
+): Promise<ThinLineResult> {
+  const started = performance.now()
+
+  // 把 blob URL 或普通 URL 拿到 Blob
+  const resp = await fetch(sourceUrl)
+  const srcBlob = await resp.blob()
+
+  const form = new FormData()
+  form.append('image', srcBlob, 'line.png')
+  form.append('lineWidth', String(lineWidth))
+
+  const result = await fetch(`${apiBase}/api/thin-line`, {
+    method: 'POST',
+    body: form,
+  })
+
+  if (!result.ok) {
+    const text = await result.text().catch(() => '')
+    throw new Error(`thin-line ${result.status}: ${text.slice(0, 300)}`)
+  }
+
+  const blob = await result.blob()
+  const width = Number(result.headers.get('x-line-width') ?? 0)
+  const height = Number(result.headers.get('x-line-height') ?? 0)
+  const url = URL.createObjectURL(blob)
+
+  return {
+    url,
+    blob,
+    width,
+    height,
     byteLength: blob.size,
     elapsedMs: Math.round(performance.now() - started),
   }

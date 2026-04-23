@@ -1,0 +1,1 @@
+"""GlyphLens backend (FastAPI + SQLite)."""

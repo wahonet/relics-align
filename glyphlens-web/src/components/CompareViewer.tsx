@@ -1,9 +1,15 @@
 import { GripVertical, Home } from 'lucide-react'
-import OpenSeadragon from 'openseadragon'
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+} from 'react'
 
 import { cn } from '@/lib/cn'
-import { createViewportSync } from '@/lib/osdSync'
 import type { ImageProcessingProduct } from '@/types/imageProcessing'
 
 interface CompareViewerProps {
@@ -13,24 +19,19 @@ interface CompareViewerProps {
   className?: string
 }
 
-const OSD_OPTIONS: Partial<OpenSeadragon.Options> = {
-  showNavigationControl: false,
-  showNavigator: false,
-  visibilityRatio: 0.25,
-  minZoomImageRatio: 0.6,
-  maxZoomPixelRatio: 6,
-  defaultZoomLevel: 0,
-  animationTime: 0.5,
-  blendTime: 0.1,
-  constrainDuringPan: false,
-  gestureSettingsMouse: {
-    clickToZoom: false,
-    dblClickToZoom: true,
-    scrollToZoom: true,
-    flickEnabled: true,
-  },
+interface View {
+  scale: number
+  tx: number
+  ty: number
 }
 
+/**
+ * 图像对比视口：两张图重叠渲染、共享一个 pan/zoom 变换，
+ * 通过 clip-path 把对比图从中缝向左展示。
+ *
+ * 交互：左键拖拽 pan、滚轮以鼠标为锚缩放、Home 按钮 fit。
+ * 基准图 natural 尺寸未变时保留 view，切到不同尺寸会重新 fit。
+ */
 export default function CompareViewer({
   baseline,
   comparison,
@@ -38,182 +39,231 @@ export default function CompareViewer({
   className,
 }: CompareViewerProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const baselineHostRef = useRef<HTMLDivElement | null>(null)
-  const comparisonHostRef = useRef<HTMLDivElement | null>(null)
-  const baselineViewerRef = useRef<OpenSeadragon.Viewer | null>(null)
-  const comparisonViewerRef = useRef<OpenSeadragon.Viewer | null>(null)
+  const baselineImgRef = useRef<HTMLImageElement | null>(null)
+  const panRef = useRef<{
+    startX: number
+    startY: number
+    origTx: number
+    origTy: number
+  } | null>(null)
+  const lastSizeRef = useRef<{ w: number; h: number } | null>(null)
 
+  const [view, setView] = useState<View>({ scale: 1, tx: 0, ty: 0 })
+  const [baselineReady, setBaselineReady] = useState(false)
+  const [comparisonReady, setComparisonReady] = useState(false)
+  const [baselineFailed, setBaselineFailed] = useState(false)
   const [split, setSplit] = useState(0.5)
-  const [baselineStatus, setBaselineStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [comparisonStatus, setComparisonStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
+  const hasCompare =
+    compareEnabled && !!comparison && comparison.key !== baseline.key
+
+  // 切 src 时重置 ready 标记（但保留 view，等 onLoad 根据尺寸决定是否 fit）
   useEffect(() => {
-    const host = baselineHostRef.current
-    if (!host) {
-      return
-    }
-
-    const viewer = OpenSeadragon({
-      element: host,
-      ...OSD_OPTIONS,
-    })
-
-    const handleOpen = () => setBaselineStatus('ready')
-    const handleFail = () => setBaselineStatus('error')
-    viewer.addHandler('open', handleOpen)
-    viewer.addHandler('open-failed', handleFail)
-
-    baselineViewerRef.current = viewer
-
-    return () => {
-      viewer.removeHandler('open', handleOpen)
-      viewer.removeHandler('open-failed', handleFail)
-      viewer.destroy()
-      baselineViewerRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    const viewer = baselineViewerRef.current
-    if (!viewer) {
-      return
-    }
-
-    let preservedCenter: OpenSeadragon.Point | null = null
-    let preservedZoom: number | null = null
-    if (viewer.world.getItemCount() > 0) {
-      preservedCenter = viewer.viewport.getCenter(true)
-      preservedZoom = viewer.viewport.getZoom(true)
-    }
-
-    const handleOnce = () => {
-      if (preservedCenter !== null && preservedZoom !== null) {
-        viewer.viewport.panTo(preservedCenter, true)
-        viewer.viewport.zoomTo(preservedZoom, preservedCenter, true)
-        viewer.forceRedraw()
-      }
-    }
-    viewer.addOnceHandler('open', handleOnce)
-
-    setBaselineStatus('loading')
-    viewer.open({ tileSource: { type: 'image', url: baseline.src } })
+    setBaselineReady(false)
+    setBaselineFailed(false)
   }, [baseline.src])
 
   useEffect(() => {
-    if (!compareEnabled || !comparison) {
-      return
-    }
+    setComparisonReady(false)
+  }, [comparison?.src])
 
-    const host = comparisonHostRef.current
-    const primary = baselineViewerRef.current
-    if (!host || !primary) {
-      return
-    }
-
-    setComparisonStatus('loading')
-
-    const viewer = OpenSeadragon({
-      element: host,
-      ...OSD_OPTIONS,
-      mouseNavEnabled: false,
+  const fitTo = useCallback((imgW: number, imgH: number) => {
+    const root = rootRef.current
+    if (!root || !imgW || !imgH) return
+    const cw = root.clientWidth
+    const ch = root.clientHeight
+    const scale = Math.min(cw / imgW, ch / imgH) * 0.95
+    setView({
+      scale,
+      tx: (cw - imgW * scale) / 2,
+      ty: (ch - imgH * scale) / 2,
     })
+  }, [])
 
-    const handleOpen = () => {
-      setComparisonStatus('ready')
-      if (primary.world.getItemCount() === 0) {
-        return
+  // 容器尺寸变化：如果图的自然尺寸未变（即用户未进入过别件文物），就按当前 naturalSize 重 fit
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const ro = new ResizeObserver(() => {
+      const img = baselineImgRef.current
+      if (img?.naturalWidth && img.naturalHeight) {
+        fitTo(img.naturalWidth, img.naturalHeight)
       }
-      const center = primary.viewport.getCenter(true)
-      const zoom = primary.viewport.getZoom(true)
-      viewer.viewport.panTo(center, true)
-      viewer.viewport.zoomTo(zoom, center, true)
-      viewer.forceRedraw()
+    })
+    ro.observe(root)
+    return () => ro.disconnect()
+  }, [fitTo])
+
+  const handleBaselineLoad = () => {
+    const img = baselineImgRef.current
+    if (!img) return
+    setBaselineReady(true)
+    const size = { w: img.naturalWidth, h: img.naturalHeight }
+    const last = lastSizeRef.current
+    // 同尺寸（通常是"同件文物不同产物"）保留视角；异尺寸 fit
+    if (!last || last.w !== size.w || last.h !== size.h) {
+      fitTo(size.w, size.h)
     }
-    const handleFail = () => setComparisonStatus('error')
-    viewer.addHandler('open', handleOpen)
-    viewer.addHandler('open-failed', handleFail)
+    lastSizeRef.current = size
+  }
 
-    comparisonViewerRef.current = viewer
-    viewer.open({ tileSource: { type: 'image', url: comparison.src } })
-
-    const disposeSync = createViewportSync({ leftViewer: primary, rightViewer: viewer })
-
-    return () => {
-      disposeSync()
-      viewer.removeHandler('open', handleOpen)
-      viewer.removeHandler('open-failed', handleFail)
-      viewer.destroy()
-      comparisonViewerRef.current = null
+  const handleReset = () => {
+    const img = baselineImgRef.current
+    if (img?.naturalWidth) {
+      fitTo(img.naturalWidth, img.naturalHeight)
     }
-  }, [compareEnabled, comparison])
+  }
 
-  const startDrag = useCallback(
+  // ---- pan / zoom ----
+  const onWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
+    if (!baselineReady) return
+    const r = rootRef.current?.getBoundingClientRect()
+    if (!r) return
+    const cx = e.clientX - r.left
+    const cy = e.clientY - r.top
+    setView((v) => {
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+      const next = Math.max(0.05, Math.min(40, v.scale * factor))
+      const k = next / v.scale
+      return {
+        scale: next,
+        tx: cx - k * (cx - v.tx),
+        ty: cy - k * (cy - v.ty),
+      }
+    })
+  }
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!baselineReady) return
+    if (e.button !== 0 && e.button !== 1) return
+    e.preventDefault()
+    panRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origTx: view.tx,
+      origTy: view.ty,
+    }
+    rootRef.current?.setPointerCapture(e.pointerId)
+  }
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = panRef.current
+    if (!pan) return
+    setView((v) => ({
+      ...v,
+      tx: pan.origTx + (e.clientX - pan.startX),
+      ty: pan.origTy + (e.clientY - pan.startY),
+    }))
+  }
+
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (panRef.current) {
+      panRef.current = null
+      rootRef.current?.releasePointerCapture(e.pointerId)
+    }
+  }
+
+  // ---- split 拖动条 ----
+  const startSplitDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()
+      event.stopPropagation()
       const root = rootRef.current
-      if (!root) {
-        return
-      }
-
+      if (!root) return
       const rect = root.getBoundingClientRect()
-
-      const updateFromClientX = (clientX: number) => {
-        const ratio = Math.min(0.98, Math.max(0.02, (clientX - rect.left) / rect.width))
+      const update = (clientX: number) => {
+        const ratio = Math.min(
+          0.98,
+          Math.max(0.02, (clientX - rect.left) / rect.width),
+        )
         setSplit(ratio)
       }
-
-      updateFromClientX(event.clientX)
-
-      const handleMove = (ev: PointerEvent) => updateFromClientX(ev.clientX)
-      const handleUp = () => {
-        window.removeEventListener('pointermove', handleMove)
-        window.removeEventListener('pointerup', handleUp)
-        window.removeEventListener('pointercancel', handleUp)
+      update(event.clientX)
+      const onMove = (ev: PointerEvent) => update(ev.clientX)
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
       }
-
-      window.addEventListener('pointermove', handleMove)
-      window.addEventListener('pointerup', handleUp)
-      window.addEventListener('pointercancel', handleUp)
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointercancel', onUp)
     },
     [],
   )
 
-  const clipPath = `inset(0 ${Math.round((1 - split) * 10000) / 100}% 0 0)`
+  const clipPath = useMemo(
+    () => `inset(0 ${Math.round((1 - split) * 10000) / 100}% 0 0)`,
+    [split],
+  )
 
-  const hasCompare = compareEnabled && comparison && comparison.key !== baseline.key
-
-  const resetView = useCallback(() => {
-    const primary = baselineViewerRef.current
-    if (primary && primary.world.getItemCount() > 0) {
-      primary.viewport.goHome(false)
-    }
-    const secondary = comparisonViewerRef.current
-    if (secondary && secondary.world.getItemCount() > 0) {
-      secondary.viewport.goHome(false)
-    }
-  }, [])
+  const transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`
 
   return (
     <div
       ref={rootRef}
       className={cn(
-        'relative overflow-hidden rounded-2xl border border-paper-400/60 bg-ink-800 shadow-[0_24px_60px_-35px_rgba(35,26,15,0.8)]',
+        'relative overflow-hidden rounded-2xl border border-paper-400/60 bg-ink-800 shadow-[0_24px_60px_-35px_rgba(35,26,15,0.8)] select-none touch-none',
+        panRef.current ? 'cursor-grabbing' : 'cursor-grab',
         className,
       )}
+      onWheel={onWheel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
     >
-      <div ref={baselineHostRef} className="viewer-canvas absolute inset-0" />
+      {/* 基准图 */}
+      <div
+        className="absolute left-0 top-0"
+        style={{
+          transform,
+          transformOrigin: 'top left',
+          visibility: baselineReady ? 'visible' : 'hidden',
+        }}
+      >
+        <img
+          ref={baselineImgRef}
+          src={baseline.src}
+          alt=""
+          draggable={false}
+          onLoad={handleBaselineLoad}
+          onError={() => setBaselineFailed(true)}
+          className="block"
+          style={{ maxWidth: 'none' }}
+        />
+      </div>
 
+      {/* 对比图：只显示左半边（由 split 控制） */}
       {hasCompare ? (
         <div
-          ref={comparisonHostRef}
-          className="viewer-canvas pointer-events-none absolute inset-0"
+          className="pointer-events-none absolute left-0 top-0 h-full w-full"
           style={{ clipPath, WebkitClipPath: clipPath }}
-        />
+        >
+          <div
+            className="absolute left-0 top-0"
+            style={{
+              transform,
+              transformOrigin: 'top left',
+              visibility: comparisonReady ? 'visible' : 'hidden',
+            }}
+          >
+            <img
+              src={comparison!.src}
+              alt=""
+              draggable={false}
+              onLoad={() => setComparisonReady(true)}
+              className="block"
+              style={{ maxWidth: 'none' }}
+            />
+          </div>
+        </div>
       ) : null}
 
+      {/* Home */}
       <button
         type="button"
-        onClick={resetView}
+        onClick={handleReset}
         title="回到全图 (Home)"
         className="absolute right-3 bottom-3 z-30 inline-flex h-9 w-9 items-center justify-center rounded-full border border-paper-300/70 bg-paper-50/90 text-ink-500 shadow-sm transition hover:border-ochre-500/70 hover:text-ochre-600"
       >
@@ -223,7 +273,7 @@ export default function CompareViewer({
       {hasCompare ? (
         <>
           <div
-            className="pointer-events-none absolute inset-y-0 z-20 border-l border-r border-ochre-500/80 bg-ochre-400/80"
+            className="pointer-events-none absolute inset-y-0 z-20 bg-ochre-400/80"
             style={{ left: `calc(${split * 100}% - 1px)`, width: '2px' }}
           />
           <div
@@ -234,7 +284,7 @@ export default function CompareViewer({
             aria-valuemax={100}
             className="absolute inset-y-0 z-30 flex cursor-ew-resize items-center justify-center"
             style={{ left: `calc(${split * 100}% - 14px)`, width: '28px' }}
-            onPointerDown={startDrag}
+            onPointerDown={startSplitDrag}
           >
             <span className="flex h-10 w-10 items-center justify-center rounded-full border border-ochre-500/80 bg-paper-50 text-ochre-600 shadow-[0_8px_22px_-10px_rgba(35,26,15,0.5)]">
               <GripVertical className="h-4 w-4" />
@@ -250,26 +300,26 @@ export default function CompareViewer({
         </>
       ) : null}
 
-      {baselineStatus === 'loading' ? (
+      {!baselineReady && !baselineFailed ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center">
           <span className="rounded-full border border-paper-300/60 bg-paper-50/90 px-3 py-1 text-xs text-ink-400">
-            正在载入 {baseline.label}...
+            正在载入 {baseline.label}…
           </span>
         </div>
       ) : null}
 
-      {baselineStatus === 'error' ? (
+      {baselineFailed ? (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-ink-800/80">
           <div className="rounded-xl border border-seal-500/40 bg-paper-50/95 px-4 py-3 text-sm text-ink-600">
-            主图加载失败，请检查 `public/demo/processed/` 下的文件。
+            主图加载失败：请确认后端产物或 `public/storage/relics/` 下的文件。
           </div>
         </div>
       ) : null}
 
-      {hasCompare && comparisonStatus === 'loading' ? (
+      {hasCompare && !comparisonReady ? (
         <div className="pointer-events-none absolute inset-x-0 top-14 z-10 flex justify-center">
           <span className="rounded-full border border-paper-300/60 bg-paper-50/90 px-3 py-1 text-xs text-ink-400">
-            正在载入对比图 {comparison?.label ?? ''}...
+            正在载入对比图 {comparison?.label ?? ''}…
           </span>
         </div>
       ) : null}

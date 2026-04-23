@@ -287,6 +287,91 @@ def extract_lines(image: ImageArray) -> OperatorResult:
     )
 
 
+@dataclass(frozen=True)
+class LineParams:
+    """前端 LineParameterPanel 一一对应的完整参数集。"""
+
+    gaussian_sigma: float = 3.2
+    canny_low: int = 45
+    canny_high: int = 130
+    use_adaptive: bool = True
+    adaptive_block_size: int = 21
+    adaptive_c: int = 9
+    close_kernel: int = 3  # 0 表示不做形态学闭合
+    min_area_ratio: float = 0.0005
+    keep_largest_n: int = 0  # 0 表示保留全部通过面积阈值的连通域
+    dilate_iters: int = 0
+    invert: bool = True
+
+
+def line_with_params(image: ImageArray, params: LineParams) -> ImageArray:
+    """根据 LineParams 生成线图（与前端 opencv.js 管线一一对应）。"""
+
+    gray = _ensure_gray(_normalize_to_uint8(image))
+
+    sigma = max(0.1, float(params.gaussian_sigma))
+    blurred = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+
+    combined = cv2.Canny(blurred, int(params.canny_low), int(params.canny_high))
+
+    if params.use_adaptive:
+        block = int(params.adaptive_block_size)
+        if block < 3:
+            block = 3
+        if block % 2 == 0:
+            block += 1
+        adaptive = cv2.adaptiveThreshold(
+            gray,
+            maxValue=255,
+            adaptiveMethod=cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            thresholdType=cv2.THRESH_BINARY_INV,
+            blockSize=block,
+            C=int(params.adaptive_c),
+        )
+        open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        adaptive = cv2.morphologyEx(adaptive, cv2.MORPH_OPEN, open_kernel)
+        combined = cv2.bitwise_or(combined, adaptive)
+
+    close_ksize = int(params.close_kernel)
+    if close_ksize > 0:
+        close_ksize = max(3, close_ksize if close_ksize % 2 == 1 else close_ksize + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_ksize, close_ksize))
+        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
+
+    if params.min_area_ratio > 0 or params.keep_largest_n > 0:
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            combined, connectivity=8
+        )
+        min_area = int(combined.shape[0] * combined.shape[1] * params.min_area_ratio)
+
+        areas = [
+            (i, int(stats[i, cv2.CC_STAT_AREA]))
+            for i in range(1, num_labels)
+            if stats[i, cv2.CC_STAT_AREA] >= min_area
+        ]
+
+        if params.keep_largest_n > 0:
+            areas.sort(key=lambda item: item[1], reverse=True)
+            keep_ids = {i for i, _ in areas[: params.keep_largest_n]}
+        else:
+            keep_ids = {i for i, _ in areas}
+
+        filtered = np.zeros_like(combined)
+        if keep_ids:
+            mask = np.isin(labels, list(keep_ids))
+            filtered[mask] = 255
+        combined = filtered
+
+    if params.dilate_iters > 0:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        combined = cv2.dilate(combined, kernel, iterations=int(params.dilate_iters))
+
+    if params.invert:
+        combined = cv2.bitwise_not(combined)
+
+    return combined
+
+
 # ---------------------------------------------------------------------------
 # Digital rubbing（数字拓片）
 # ---------------------------------------------------------------------------
@@ -328,6 +413,144 @@ def digital_rubbing(image: ImageArray) -> OperatorResult:
         description="高斯背景归一化消除光照不均，再做 CLAHE 和黑白反相，接近传统乌金拓片；滑块可调墨色浓淡。",
         image=rubbing_at(image, level=0.5),
     )
+
+
+# ---------------------------------------------------------------------------
+# 参数化渲染（与前端多滑块一一对应）
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SharpenParams:
+    amount: float = 1.45       # 锐化强度 0.3 ~ 3.0
+    radius: float = 1.9        # 模糊半径 0.5 ~ 5.0
+
+def sharpen_with_params(image: ImageArray, p: SharpenParams) -> ImageArray:
+    base = prepare_base(image)
+    blur = cv2.GaussianBlur(base, (0, 0), sigmaX=max(0.1, p.radius), sigmaY=max(0.1, p.radius))
+    return cv2.addWeighted(base, 1.0 + p.amount, blur, -p.amount, 0)
+
+
+@dataclass(frozen=True)
+class MicrotraceParams:
+    clip_limit: float = 3.3    # CLAHE 对比度 0.5 ~ 8.0
+    tile_size: int = 10        # CLAHE 分块 2 ~ 24
+    bg_sigma: float = 60.0     # 背景均匀化核 10 ~ 120
+    gain: float = 140.0        # 归一化增益 60 ~ 220
+    blend_alpha: float = 0.35  # 与原图混合 0 ~ 1（0=纯处理，1=纯原图）
+
+def microtrace_with_params(image: ImageArray, p: MicrotraceParams) -> ImageArray:
+    base = prepare_base(image)
+    lab = cv2.cvtColor(base, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+
+    tile = max(2, int(round(p.tile_size)))
+    clahe = cv2.createCLAHE(clipLimit=max(0.1, p.clip_limit), tileGridSize=(tile, tile))
+    l_enh = clahe.apply(l_ch)
+
+    sigma = max(1.0, p.bg_sigma)
+    bg = cv2.GaussianBlur(l_enh, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    l_f = l_enh.astype(np.float32) + 1.0
+    bg_f = bg.astype(np.float32) + 1.0
+    ratio = np.clip(l_f / bg_f * p.gain, 0, 255).astype(np.uint8)
+
+    merged = cv2.merge((ratio, a_ch, b_ch))
+    enhanced = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+    alpha = max(0.0, min(1.0, p.blend_alpha))
+    return cv2.addWeighted(enhanced, 1.0 - alpha, base, alpha, 0)
+
+
+@dataclass(frozen=True)
+class GrayscaleParams:
+    clip_limit: float = 2.0    # CLAHE 对比度 0.5 ~ 6.0
+    tile_size: int = 8         # CLAHE 分块 2 ~ 24
+    sharpen_amount: float = 0.0  # 锐化叠加 0 ~ 0.6
+
+def grayscale_with_params(image: ImageArray, p: GrayscaleParams) -> ImageArray:
+    gray = _ensure_gray(_normalize_to_uint8(image))
+    tile = max(2, int(round(p.tile_size)))
+    clahe = cv2.createCLAHE(clipLimit=max(0.1, p.clip_limit), tileGridSize=(tile, tile))
+    balanced = clahe.apply(gray)
+
+    amt = max(0.0, min(1.0, p.sharpen_amount))
+    if amt > 0:
+        blur = cv2.GaussianBlur(balanced, (0, 0), sigmaX=1.2)
+        balanced = cv2.addWeighted(balanced, 1.0 + amt, blur, -amt, 0)
+    return balanced
+
+
+@dataclass(frozen=True)
+class RubbingParams:
+    bg_sigma: float = 55.0     # 背景均匀化核 10 ~ 120
+    gain: float = 133.0        # 归一化增益 60 ~ 220
+    clip_limit: float = 2.5    # CLAHE 对比度 0.5 ~ 6.0
+    tile_size: int = 12        # CLAHE 分块 2 ~ 24
+    sharpen_amount: float = 0.1  # 拓片锐化 0 ~ 0.5
+
+def rubbing_with_params(image: ImageArray, p: RubbingParams) -> ImageArray:
+    gray = _ensure_gray(_normalize_to_uint8(image))
+
+    sigma = max(1.0, p.bg_sigma)
+    bg = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    g_f = gray.astype(np.float32) + 1.0
+    bg_f = bg.astype(np.float32) + 1.0
+    normalized = np.clip(g_f / bg_f * p.gain, 0, 255).astype(np.uint8)
+
+    tile = max(2, int(round(p.tile_size)))
+    clahe = cv2.createCLAHE(clipLimit=max(0.1, p.clip_limit), tileGridSize=(tile, tile))
+    contrasted = clahe.apply(normalized)
+    rubbed = cv2.bitwise_not(contrasted)
+
+    amt = max(0.0, min(1.0, p.sharpen_amount))
+    if amt > 0:
+        blur = cv2.GaussianBlur(rubbed, (0, 0), sigmaX=2.0)
+        rubbed = cv2.addWeighted(rubbed, 1.0 + amt, blur, -amt, 0)
+    return rubbed
+
+
+@dataclass(frozen=True)
+class OriginalParams:
+    brightness: float = 0.0     # 亮度偏移 -50 ~ 50
+    contrast: float = 1.0       # 对比度倍率 0.5 ~ 2.0
+    saturation: float = 1.0     # 饱和度倍率 0.0 ~ 2.0
+    gamma: float = 1.0          # 伽马校正 0.3 ~ 3.0
+
+def original_with_params(image: ImageArray, p: OriginalParams) -> ImageArray:
+    base = prepare_base(image)
+    result = base.astype(np.float32)
+
+    # 对比度：以 128 为中心缩放
+    if p.contrast != 1.0:
+        result = (result - 128.0) * max(0.01, p.contrast) + 128.0
+
+    # 亮度
+    if p.brightness != 0.0:
+        result = result + p.brightness
+
+    result = np.clip(result, 0, 255).astype(np.uint8)
+
+    # 伽马
+    if p.gamma != 1.0:
+        g = max(0.1, p.gamma)
+        lut = np.array([((i / 255.0) ** (1.0 / g)) * 255 for i in range(256)], dtype=np.uint8)
+        result = cv2.LUT(result, lut)
+
+    # 饱和度：在 HSV 空间调
+    if p.saturation != 1.0:
+        hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * max(0.0, p.saturation), 0, 255)
+        result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    return result
+
+
+PRODUCT_PARAMS = {
+    "original": (OriginalParams, original_with_params),
+    "sharpen": (SharpenParams, sharpen_with_params),
+    "microtrace": (MicrotraceParams, microtrace_with_params),
+    "grayscale": (GrayscaleParams, grayscale_with_params),
+    "rubbing": (RubbingParams, rubbing_with_params),
+}
 
 
 # ---------------------------------------------------------------------------

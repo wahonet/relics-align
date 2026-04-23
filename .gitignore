@@ -25,7 +25,7 @@ Thumbs.db
 *.swp
 *.swo
 
-# 原始大图（超 GitHub 100MB 限制，请本地放入 demo/ 后再跑 process.py）
+# 原始素材大图（碑刻照片 / 扫描 RAW，均不入库；请本地放入 demo/ 后再跑 process.py）
 demo/*.tif
 demo/*.TIF
 demo/*.tiff
@@ -33,9 +33,17 @@ demo/*.TIFF
 demo/*.CR2
 demo/*.NEF
 demo/*.RAW
+demo/*.png
+demo/*.PNG
+demo/*.jpg
+demo/*.JPG
+demo/*.jpeg
 
 # 前端动态拷贝的 opencv.js（由 scripts/copy-opencv.mjs 生成，不入库）
 glyphlens-web/public/vendor/opencv.js
+
+# 后端运行时数据：SQLite 库、用户上传原图、处理产物
+glyphlens-web/public/storage/
 
 # 其他
 .env

@@ -2,7 +2,6 @@ import { create } from 'zustand'
 
 export type ModuleId =
   | 'imageProcessing'
-  | 'multiLayer'
   | 'annotation'
   | 'dataset'
 
@@ -14,9 +13,8 @@ export interface ModuleDescriptor {
 
 export const MODULES: ModuleDescriptor[] = [
   { id: 'imageProcessing', title: '图像处理', available: true },
-  { id: 'multiLayer', title: '多图层比对', available: true },
-  { id: 'annotation', title: '字迹标注', available: false },
-  { id: 'dataset', title: '数据管理', available: false },
+  { id: 'annotation', title: '字迹标注', available: true },
+  { id: 'dataset', title: '数据管理', available: true },
 ]
 
 interface AppStore {
