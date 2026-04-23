@@ -1,0 +1,51 @@
+{
+  "id": "xian_beilin_01",
+  "title": "西安碑林 · 示例碑 01",
+  "kind": "stele",
+  "location": "陕西西安",
+  "period": "唐代楷书示例",
+  "description": "用于前端 MVP 的碑刻示例数据。manifest 先假定真实瓦片位于本地 `/tiles`，若不存在则自动回退到 OpenSeadragon 官方高精示例图，方便先验证界面与交互。",
+  "layers": [
+    {
+      "id": "photo_raw",
+      "kind": "photo_raw",
+      "label": "原石照",
+      "tileSource": "/tiles/stele/xian_beilin_01/photo_raw.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/highsmith/highsmith.dzi",
+      "defaultOpacity": 1,
+      "defaultVisible": true,
+      "notes": "后续接入实拍 TIFF/JPG 生成的 DZI。"
+    },
+    {
+      "id": "rubbing_paper",
+      "kind": "rubbing_paper",
+      "label": "传统拓片",
+      "tileSource": "/tiles/stele/xian_beilin_01/rubbing_paper.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/highsmith/highsmith.dzi",
+      "defaultOpacity": 0.45,
+      "defaultVisible": false,
+      "notes": "适合对照原石照查看笔画残损与补泐。"
+    },
+    {
+      "id": "rubbing_digital",
+      "kind": "rubbing_digital",
+      "label": "数字拓印",
+      "tileSource": "/tiles/stele/xian_beilin_01/rubbing_digital.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/highsmith/highsmith.dzi",
+      "defaultOpacity": 0.7,
+      "defaultVisible": true,
+      "notes": "后续由 OpenCV 管线生成黑白对比拓印效果。"
+    },
+    {
+      "id": "enhanced_clahe",
+      "kind": "enhanced_clahe",
+      "label": "CLAHE 增强",
+      "tileSource": "/tiles/stele/xian_beilin_01/enhanced_clahe.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/highsmith/highsmith.dzi",
+      "defaultOpacity": 0.35,
+      "defaultVisible": false,
+      "notes": "为后续图像增强接口预留图层位。"
+    }
+  ],
+  "regions": []
+}

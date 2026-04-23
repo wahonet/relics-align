@@ -1,0 +1,77 @@
+{
+  "id": "nanyang_huaxiangshi_01",
+  "title": "南阳汉画像石 · 示例 01",
+  "kind": "pictorial_stone",
+  "location": "河南南阳",
+  "period": "东汉画像石示例",
+  "description": "强调掠射光方向切换、线描层与数字拓印层的组合，用于验证画像石场景下的图层组织方式。",
+  "layers": [
+    {
+      "id": "photo_raw",
+      "kind": "photo_raw",
+      "label": "原始照片",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/photo_raw.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 1,
+      "defaultVisible": true,
+      "notes": "用于承载原始浮雕纹样细节。"
+    },
+    {
+      "id": "photo_raking_light_n",
+      "kind": "photo_raking_light_n",
+      "label": "北向掠射光",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/photo_raking_light_n.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 0.75,
+      "defaultVisible": true,
+      "notes": "适合观察浅浮雕阴影。"
+    },
+    {
+      "id": "photo_raking_light_e",
+      "kind": "photo_raking_light_e",
+      "label": "东向掠射光",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/photo_raking_light_e.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 0.75,
+      "defaultVisible": false
+    },
+    {
+      "id": "photo_raking_light_s",
+      "kind": "photo_raking_light_s",
+      "label": "南向掠射光",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/photo_raking_light_s.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 0.75,
+      "defaultVisible": false
+    },
+    {
+      "id": "photo_raking_light_w",
+      "kind": "photo_raking_light_w",
+      "label": "西向掠射光",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/photo_raking_light_w.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 0.75,
+      "defaultVisible": false
+    },
+    {
+      "id": "line_drawing",
+      "kind": "line_drawing",
+      "label": "墨线图",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/line_drawing.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 0.55,
+      "defaultVisible": false,
+      "notes": "后续用线条提取或人工校勘方式生成。"
+    },
+    {
+      "id": "rubbing_digital",
+      "kind": "rubbing_digital",
+      "label": "数字拓印",
+      "tileSource": "/tiles/pictorial_stone/nanyang_huaxiangshi_01/rubbing_digital.dzi",
+      "fallbackTileSource": "https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+      "defaultOpacity": 0.4,
+      "defaultVisible": false
+    }
+  ],
+  "regions": []
+}

@@ -1,0 +1,72 @@
+{
+  "id": "_08A9952",
+  "title": "汉画像石示例",
+  "subtitle": "来自 demo 目录的示例图像",
+  "source": "/demo/processed/original.jpg",
+  "originalFile": "_08A9952.tif",
+  "generatedAt": "2026-04-23T12:10:06Z",
+  "pipelineLongEdge": 4096,
+  "jpegQuality": 92,
+  "products": [
+    {
+      "key": "original",
+      "label": "原始高清",
+      "description": "原始 TIFF 抽样到长边 4096px 的 web 预览，作为其他处理的参照。",
+      "colorMode": "color",
+      "src": "/demo/processed/original.jpg",
+      "sizeBytes": 6227318,
+      "width": 3109,
+      "height": 4096
+    },
+    {
+      "key": "microtrace",
+      "label": "微痕增强",
+      "description": "先对 L 通道做 CLAHE，再用大核高斯做光照均匀化，使浅浮雕与风化痕迹显影；可用滑块调节显影强度。",
+      "colorMode": "color",
+      "src": "/demo/processed/microtrace.jpg",
+      "sizeBytes": 7449133,
+      "width": 3109,
+      "height": 4096
+    },
+    {
+      "key": "sharpen",
+      "label": "锐化增强",
+      "description": "基于 Unsharp Mask 的高频锐化，在原图基础上放大笔画边缘与凿刻痕迹；可用滑块调节锐化强度。",
+      "colorMode": "color",
+      "src": "/demo/processed/sharpen.jpg",
+      "sizeBytes": 8660111,
+      "width": 3109,
+      "height": 4096
+    },
+    {
+      "key": "grayscale",
+      "label": "灰度图",
+      "description": "在单通道灰度上做 CLAHE，去除色相干扰、强调石面明度结构；可用滑块调节对比强弱。",
+      "colorMode": "gray",
+      "src": "/demo/processed/grayscale.jpg",
+      "sizeBytes": 6946026,
+      "width": 3109,
+      "height": 4096
+    },
+    {
+      "key": "line",
+      "label": "数字线图",
+      "description": "对图像做低通后只取主边缘，再按连通域面积过滤小碎线；滑块从「粗骨架」到「细致」连续调节。",
+      "colorMode": "binary",
+      "src": "/demo/processed/line.jpg",
+      "sizeBytes": 193185,
+      "width": 3109,
+      "height": 4096
+    },
+    {
+      "key": "rubbing",
+      "label": "数字拓片",
+      "description": "高斯背景归一化消除光照不均，再做 CLAHE 和黑白反相，接近传统乌金拓片；滑块可调墨色浓淡。",
+      "colorMode": "gray",
+      "src": "/demo/processed/rubbing.jpg",
+      "sizeBytes": 7818154,
+      "width": 3109,
+      "height": 4096
+    }
+  ]
+}
